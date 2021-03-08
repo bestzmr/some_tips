@@ -1,4 +1,4 @@
-package com.merlin;
+package com.merlin.some_tips;
 
 import java.util.function.Consumer;
 
@@ -6,6 +6,11 @@ public class LambdaScopeTest {
 
     public int x = 0;
 
+    static class StaticClass {
+        static {
+            System.out.println("static class ..");
+        }
+    }
     class FirstLevel {
 
         public int x = 1;

@@ -1,4 +1,4 @@
-package com.merlin;
+package com.merlin.some_tips;
 
 import java.util.ArrayList;
 import java.util.List;
