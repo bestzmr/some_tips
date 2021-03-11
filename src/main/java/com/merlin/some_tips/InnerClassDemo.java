@@ -20,6 +20,7 @@ public class InnerClassDemo {
 	}
 
 	static class StaticInnerClass {
+		public int l2 = 2;
 		public void println() {
 			System.out.println(ll);
 //			System.out.println();
