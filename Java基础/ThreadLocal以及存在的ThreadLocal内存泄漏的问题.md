@@ -118,6 +118,8 @@ get方法执行过程类似。ThreadLocal首先会获取当前线程对象，然
 
 
 
+
+
 ## ThreadLocal的内存泄漏分析
 
 **实现原理**
@@ -155,6 +157,85 @@ ThreadLocal的实现原理，每一个Thread维护一个ThreadLocalMap，key为�
 - 当前Thread实例一直存在，则会一直强引用着ThreadLocalMap，也就是说ThreadLocalMap也不会被GC
 
 也就是说，如果Thread实例还在，但是ThreadLocal实例却不在了，则ThreadLocal实例作为key所关联的value无法被外部访问，却还被强引用着，因此出现了内存泄露。
+
+
+
+## 那为什么使用弱引用而不是强引用？？
+
+我们看看Key使用的
+
+### key 使用强引用
+
+当hreadLocalMap的key为强引用回收ThreadLocal时，因为ThreadLocalMap还持有ThreadLocal的强引用，如果没有手动删除，ThreadLocal不会被回收，导致Entry内存泄漏。
+
+### key 使用弱引用
+
+当ThreadLocalMap的key为弱引用回收ThreadLocal时，由于ThreadLocalMap持有ThreadLocal的弱引用，即使没有手动删除，ThreadLocal也会被回收。当key为null，在下一次ThreadLocalMap调用set(),get()，remove()方法的时候会被清除value值。
+
+
+
+### ThreadLocalMap的remove()分析
+
+在这里只分析remove()方式，其他的方法可以查看源码进行分析：
+
+```java
+private void remove(ThreadLocal<?> key) {
+    //使用hash方式，计算当前ThreadLocal变量所在table数组位置
+    Entry[] tab = table;
+    int len = tab.length;
+    int i = key.threadLocalHashCode & (len-1);
+    //再次循环判断是否在为ThreadLocal变量所在table数组位置
+    for (Entry e = tab[i];
+         e != null;
+         e = tab[i = nextIndex(i, len)]) {
+        if (e.get() == key) {
+            //调用WeakReference的clear方法清除对ThreadLocal的弱引用
+            e.clear();
+            //清理key为null的元素
+            expungeStaleEntry(i);
+            return;
+        }
+    }
+}
+```
+
+再看看清理key为null的元素expungeStaleEntry(i):
+
+```java
+private int expungeStaleEntry(int staleSlot) {
+    Entry[] tab = table;
+    int len = tab.length;
+
+    // 根据强引用的取消强引用关联规则，将value显式地设置成null，去除引用
+    tab[staleSlot].value = null;
+    tab[staleSlot] = null;
+    size--;
+
+    // 重新hash，并对table中key为null进行处理
+    Entry e;
+    int i;
+    for (i = nextIndex(staleSlot, len);
+         (e = tab[i]) != null;
+         i = nextIndex(i, len)) {
+        ThreadLocal<?> k = e.get();
+        //对table中key为null进行处理,将value设置为null，清除value的引用
+        if (k == null) {
+            e.value = null;
+            tab[i] = null;
+            size--;
+        } else {
+            int h = k.threadLocalHashCode & (len - 1);
+            if (h != i) {
+                tab[i] = null;
+                while (tab[h] != null)
+                    h = nextIndex(h, len);
+                tab[h] = e;
+            }
+        }
+    }
+    return i;
+}
+```
 
 ## ThreadLocal正确的使用方法
 
