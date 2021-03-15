@@ -23,7 +23,7 @@ Java 定义了一套注解，共有 7 个，3 个在 java.lang 中，剩下 4 �
 
 ## 1、Annotation 架构
 
-![](D:\ProjectData\idea-workspace\some_tips\imgs\Java基础\Annotation架构.jpg)
+![](..\imgs\Java基础\Annotation架构.jpg)
 
 
 
@@ -43,7 +43,7 @@ Annotation 的每一个实现类，都 "和 1 个 RetentionPolicy 关联" 并且
 
 下面，我先介绍框架图的左半边(如下图)，即 Annotation, RetentionPolicy, ElementType；然后在就 Annotation 的实现类进行举例说明。
 
-![](D:\ProjectData\idea-workspace\some_tips\imgs\Java基础\Annotation.jpg)
+![](..\imgs\Java基础\Annotation.jpg)
 
 ## 2、Annotation 组成部分
 
