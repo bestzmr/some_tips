@@ -1,7 +1,8 @@
-概括：
+**概括**：
     看Url就知道要什么
     看http method就知道干什么
     看http status code就知道结果如何
+
 **URL定位资源，用HTTP动词（GET,POST,DELETE,DETC）描述操作。**
 
 
@@ -28,13 +29,6 @@ UPDATE [http://api.qc.com/v1/profile](https://link.zhihu.com/?target=http%3A//ap
 
 禁止使用： GET [http://api.qc.com/v1/deleteFriend...](https://link.zhihu.com/?target=http%3A//api.qc.com/v1/deleteFriend)
 
-作者：覃超
-链接：https://www.zhihu.com/question/28557115/answer/48094438
-来源：知乎
-著作权归作者所有。商业转载请联系作者获得授权，非商业转载请注明出处。
-
-
-
 4. Server和Client之间传递某资源的一个表现形式，比如用JSON，XML传输文本，或者用JPG，WebP传输图片等。当然还可以压缩HTTP传输时的数据（on-wire data compression）。
 
 5. 用 HTTP Status Code传递Server的状态信息。比如最常用的 200 表示成功，500 表示Server内部错误等。
@@ -53,3 +47,20 @@ REST -- REpresentational State Transfer
 Resource：资源，即数据（前面说过网络的核心）。比如 newsfeed，friends等；
 Representational：某种表现形式，比如用JSON，XML，JPEG等；
 State Transfer：状态变化。通过HTTP动词实现。
+
+
+
+
+
+**我们一起来看看RESTFul API有哪些特点：**
+
+1. 基于“资源”，数据也好、服务也好，在RESTFul设计里一切都是资源。
+2. 无状态。一次调用一般就会返回结果，不存在类似于“打开连接-访问数据-关闭连接”这种依赖于上一次调用的情况。
+3. URL中通常不出现动词，只有名词
+4. URL语义清晰、明确
+5. 使用HTTP的GET、POST、DELETE、PUT来表示对于资源的增删改查
+6. RESTFul使用JSON不使用XML
+   我举个例子：
+   网站：/get_user?id=3
+   RESTFul: GET /user/3 (GET是HTTP类型)
+
