@@ -78,11 +78,177 @@ es与mysql的对比
 
 ![](..\..\imgs\大数据\elasticsearch\es与mysql的对比.jpg)
 
-倒排索引原理
+**倒排索引原理**
 
-文档打分机制
+ES在建立索引的时候采用了一种叫做**倒排索引**的机制，保证每次在搜索关键词的时候能够快速定位到这个关键词所属的文档。
+
+Inverted Index 主要包括两部分：
+
+一个有序的数据字典 Dictionary（包括单词 Term 和它出现的频率）。
+
+与单词 Term 对应的 Postings（即存在这个单词的文件）。
+
+当我们搜索的时候，首先将搜索的内容分解，然后在字典里找到对应 Term，从而查找到与搜索相关的文件内容。
+
+Lucene在对文档建立索引的时候，会给词典的所有的元素排好序，在搜索的时候直接根据二分查找的方法进行筛选就能够快速找到数据。
+
+ES做的要更深一点，ES希望把这个词典“**搬进**”内存，直接从内存读取数据不就比从磁盘读数据要快很多吗！问题在于对于海量的数据，索引的空间消耗十分巨大，直接搬进来肯定不合适，所以需要进一步的处理，建立词典索引（term index）。通过词典索引可以直接找到搜索词在词典中的大致位置，然后从磁盘中取出词典数据再进行查找。所以大致的结构图就变成了这样：
+
+![](..\..\imgs\大数据\elasticsearch\term-index.jpg)
+
+term index不需要存下所有的term，而仅仅是他们的一些前缀与Term Dictionary的block之间的映射关系，再结合FST(Finite State Transducers)的压缩技术，可以使term index缓存到内存中。从term index查到对应的term dictionary的block位置之后，再去磁盘上找term，大大减少了磁盘随机读的次数。有限状态转换器（Finite State Transducers）相当于是一个Trie前缀树，可以直接根据前缀就找到对应的term在词典中的位置。
+
+**es写入一个数据的过程？**
+
+集群上的每个节点都是`coordinating node`（**协调节点**），协调节点表明这个节点可以做**路由**。比如**节点1**接收到了请求，但发现这个请求的数据应该是由**节点2**处理（因为主分片在**节点2**上），所以会把请求转发到**节点2**上。
+
+- coodinate（**协调**）节点通过hash算法可以计算出是在哪个主分片上，然后**路由到对应的节点**
+- `shard = hash(document_id) % (num_of_primary_shards)`
+
+路由到对应的节点以及对应的主分片时，会做以下的事：
+
+1. 将数据写到内存缓存区
+2. 然后将数据写到translog缓存区
+3. 每隔**1s**数据从buffer中refresh到FileSystemCache中，生成segment文件，一旦生成segment文件，就能通过索引查询到了
+4. refresh完，memory buffer就清空了。
+5. 每隔**5s**中，translog 从buffer flush到磁盘中
+6. 定期/定量从FileSystemCache中,结合translog内容`flush index`到磁盘中。
+
+解释一下：
+
+- Elasticsearch会把数据先写入内存缓冲区，然后每隔**1s**刷新到文件系统缓存区（当数据被刷新到文件系统缓冲区以后，数据才可以被检索到）。所以：Elasticsearch写入的数据需要**1s**才能查询到
+- 为了防止节点宕机，内存中的数据丢失，Elasticsearch会另写一份数据到**日志文件**上，但最开始的还是写到内存缓冲区，每隔**5s**才会将缓冲区的刷到磁盘中。所以：Elasticsearch某个节点如果挂了，可能会造成有**5s**的数据丢失。
+- 等到磁盘上的translog文件大到一定程度或者超过了30分钟，会触发**commit**操作，将内存中的segement文件异步刷到磁盘中，完成持久化操作。
+
+说白了就是：写内存缓冲区（**定时**去生成segement，生成translog），能够**让数据能被索引、被持久化**。最后通过commit完成一次的持久化。
+
+等主分片写完了以后，会将数据并行发送到副本集节点上，等到所有的节点写入成功就返回**ack**给协调节点，协调节点返回**ack**给客户端，完成一次的写入。
+
+### 写数据底层原理
+
+1）document先写入导内存buffer中，同时写translog日志
+
+2)）[https://www.elastic.co/guide/cn/elasticsearch/guide/current/near-real-time.html](https://link.zhihu.com/?target=https%3A//www.elastic.co/guide/cn/elasticsearch/guide/current/near-real-time.html)
+
+refresh操作所以近实时搜索：**写入和打开一个新段(**一个追加的倒排索引**)的轻量的过程叫做 \*refresh\*** 。**每隔一秒钟**把buffer中的数据**创建一个新的segment，**这里**新段会被先写入到文件系统缓存**--这一步代价会比较低，稍后再被刷新到磁盘--这一步代价比较高。不过**只要文件已经在缓存中， 就可以像其它文件一样被打开和读取**了，内存buffer被清空。此时，新segment 中的文件就**可以被搜索**了，这就意味着document从被写入到可以被搜索需要一秒种，如果要更改这个属性，可以执行以下操作
+
+PUT /my_index
+{
+"settings": {
+"**refresh_interval**": "30s"
+}
+}
+3）[https://www.elastic.co/guide/cn/elasticsearch/guide/current/translog.html](https://link.zhihu.com/?target=https%3A//www.elastic.co/guide/cn/elasticsearch/guide/current/translog.html)
+
+flush操作导致持久化变更：**执行一个提交并且截断 translog 的行为在 Elasticsearch 被称作一次** ***flush**。*刷新（refresh）完成后, 缓存被清空但是事务日志不会。translog日志也会越来越多，当translog日志大小大于一个阀值时候或30分钟，会出发flush操作。
+
+- 所有在内存缓冲区的文档都被写入一个新的段。
+- 缓冲区被清空。
+- 一个提交点被写入硬盘。（表明有哪些segment commit了）
+- 文件系统缓存通过 `fsync` 到磁盘。
+- 老的 translog 被删除。
+
+分片每30分钟被自动刷新（flush），或者在 translog 太大的时候也会刷新。也**可以用_flush命令手动执行**。
+
+**translog每隔5秒会被写入磁盘（所以如果这5s，数据在cache而且log没持久化会丢失）**。在一次增删改操作之后translog只有在replica和primary shard都成功才会成功，如果要提高操作速度，可以设置成异步的
+
+PUT /my_index
+{
+"settings": {
+"index.translog.durability": "async" ,
+
+"index.translog.sync_interval":"5s"
+}
+}
+
+所以总结是有三个批次操作，一秒做一次refresh保证近实时搜索，5秒做一次translog持久化保证数据未持久化前留底，30分钟做一次数据持久化。
+
+2.基于translog和commit point的数据恢复
+
+在磁盘上会有一个上次持久化的commit point，translog上有一个commit point，根据这两个commit point，会把translog中的变更记录进行回放，重新执行之前的操作
+
+3.不变形下的删除和更新原理
+
+[https://www.elastic.co/guide/cn/elasticsearch/guide/current/dynamic-indices.html#deletes-and-updates](https://link.zhihu.com/?target=https%3A//www.elastic.co/guide/cn/elasticsearch/guide/current/dynamic-indices.html%23deletes-and-updates)
+
+一个文档被 “删除” 时，它实际上只是在 `.del` 文件中被 *标记* 删除。一个被标记删除的文档仍然可以被查询匹配到， 但它会在最终结果被返回前从结果集中移除。
+
+文档更新也是类似的操作方式：当一个文档被更新时，旧版本文档被标记删除，文档的新版本被索引到一个新的段中。 可能两个版本的文档都会被一个查询匹配到，但被删除的那个旧版本文档在结果集返回前就已经被移除。
+
+段合并的时候会将那些旧的已删除文档 从文件系统中清除。 被删除的文档（或被更新文档的旧版本）不会被拷贝到新的大段中。
+
+4.merge操作，段合并
+
+[https://www.elastic.co/guide/cn/elasticsearch/guide/current/merge-process.html](https://link.zhihu.com/?target=https%3A//www.elastic.co/guide/cn/elasticsearch/guide/current/merge-process.html)
+
+由于每秒会把buffer刷到segment中，所以segment会很多，为了防止这种情况出现，es内部会不断把一些相似大小的segment合并，并且物理删除del的segment。
+
+当然也可以手动执行
+
+POST /my_index/_optimize?max_num_segments=1，尽量不要手动执行，让它自动默认执行就可以了
+
+5.当你正在建立一个大的新索引时（相当于直接全部写入buffer，先不refresh，写完再refresh），可以先关闭自动刷新，待开始使用该索引时，再把它们调回来：
+
+```text
+PUT /my_logs/_settings
+{ "refresh_interval": -1 } 
+
+PUT /my_logs/_settings
+{ "refresh_interval": "1s" } 
+```
+
+**es 搜索数据过程[是指search?search和普通docid get的背后逻辑不一样？]**
+
+es 最强大的是做全文检索，就是比如你有三条数据：
+
+- `java真好玩儿啊`
+- `java好难学啊`
+- `j2ee特别牛`
+
+你根据 `java` 关键词来搜索，将包含 `java`的 `document` 给搜索出来。es 就会给你返回：java真好玩儿啊，java好难学啊。
+
+- 客户端发送请求到一个 `coordinate node`。
+- 协调节点将搜索请求转发到所有的 shard 对应的 `primary shard` 或 `replica shard`，都可以。
+- query phase：每个 shard 将自己的搜索结果（其实就是一些 `doc id`）返回给协调节点，由协调节点进行数据的合并、排序、分页等操作，产出最终结果。
+- fetch phase：接着由协调节点根据 `doc id` 去各个节点上拉取实际的 `document` 数据，最终返回给客户端。
+
+当一个搜索请求被发送到一个节点Node，这个节点就变成了协调节点。这个节点的工作是向
+所有相关的分片广播搜索请求并且把它们的响应整合成一个全局的有序结果集。这个结果集
+会被返回给客户端。
+
+**第一步是向索引里的每个节点的分片副本广播请求。就像document的 GET 请求一样，搜索请
+求可以被每个分片的原本或任意副本处理。这就是更多的副本（当结合更多的硬件时）如何
+提高搜索的吞吐量的方法。对于后续请求，协调节点会轮询所有的分片副本以分摊负载。**
+
+每一个分片在本地执行查询和建立一个长度为 from+size 的有序优先队列——这个长度意味
+着它自己的结果数量就足够满足全局的请求要求。分片返回一个轻量级的结果列表给协调节
+点。只包含documentID值和排序需要用到的值，例如 _score 。
+协调节点将这些分片级的结果合并到自己的有序优先队列里。这个就代表了最终的全局有序
+结果集。到这里，查询阶段结束。
+
+**文档打分机制**
 
 **数据类型有哪些**？
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
