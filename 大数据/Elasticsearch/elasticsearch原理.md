@@ -250,19 +250,216 @@ es 最强大的是做全文检索，就是比如你有三条数据：
 
 
 
+### 1选举临时master
+
+- 临时Master的选举过程如下：
+  （1）“ping”所有节点，获取节点列表fullPingResponses,ping结果不 包含本节点，把本节点单独添加到fullPingResponses中。
+  （2）构建两个列表。 activeMasters列表：存储集群当前活跃Master列表。遍历第一步获 取的所有节点，将每个节点所认为的当前Master节点加入activeMasters 列表中（不包括本节点）。在遍历过程中，如果配置了
+
+  	discovery.zen.master_election.ignore_non_master_pings 为 true（默认为 false）
+
+  而节点又不具备Master资格，则跳过该节点。
+
+  ![](..\..\imgs\大数据\elasticsearch\activemaster.png)
+
+      这个过程是将集群当前已存在的Master加入activeMasters列表，正常情况下只有一个。如果集群已存在Master，则每个节点都记录了当前 Master是哪个，考虑到异常情况下，可能各个节点看到的当前Master不同，这种场景个人觉得会在节点之间网络延迟比较大的情况下出现(个人觉得可能是这种情况，由于集群重新选主之后，可能某个节点网络延迟较大，没有接收到重新选举产生的主机点)，如不同机架的节点之间，网络延迟较大，在起动进程之后，出现选主结果不一致的情况。在构建activeMasters列表过程中，如果节点不具备Master资格，则 可以通过ignore_non_master_pings选项忽略它认为的那个Master。 （过滤掉没有）
+
+      masterCandidates列表：存储master候选者列表。遍历第一步获取列 表，去掉不具备Master资格的节点，添加到这个列表中。
+
+  **筛选activeMasters列表**
+  
+
+Es的master就是从activeMasters列表或者masterCandidates列表选举出来，所以选举之前es首先需要得到这两个列表。Elasticsearch节点成员首先向集群中的所有成员发送Ping请求，elasticsearch默认等待discovery.zen.ping_timeout时间，然后elasticsearch针对获取的全部response进行过滤，筛选出其中activeMasters列表，activeMaster列表是其它节点认为的当前集群的Master节点
+
+  源代码如下
+
+  ```text
+  List<DiscoveryNode> activeMasters = new ArrayList<>();
+  for (ZenPing.PingResponse pingResponse : pingResponses) {
+      //不允许将自己放在activeMasters列表中
+      if (pingResponse.master() != null && !localNode.equals(pingResponse.master())) {
+          activeMasters.add(pingResponse.master());
+      }
+  }
+  ```
+
+  可以看到elasticsearch在获取activeMasters列表的时候会排除本地节点，目的是为了避免脑裂，假设这样一个场景，当前最小编号的节点P0认为自己就是master并且P0和其它节点发生网络分区，同时es允许将自己放在activeMaster中，因为P0编号最小，那么P0永远会选择自己作为master节点，那么就会出现脑裂的情况
+
+  **筛选masterCandidates列表**
+
+  masterCandidates列表是当前集群有资格成为Master的节点，如果我们在elasticsearch.yml中配置了如下参数，那么这个节点就没有资格成为Master节点，也就不会被筛选进入masterCandidates列表
+
+  ```text
+  # 配置某个节点没有成为master资格
+  node.master:false
+  ```
+
+  源代码如下所示
+
+  ```text
+  List<ElectMasterService.MasterCandidate> masterCandidates = new ArrayList<>();
+  for (ZenPing.PingResponse pingResponse : pingResponses) {
+      if (pingResponse.node().isMasterNode()) {
+          masterCandidates.add(new ElectMasterService.MasterCandidate(pingResponse.node(), pingResponse.getClusterStateVersion()));
+      }
+  }
+  ```
+
+  （3）如果activeMasters为空，则从masterCandidates中选举，结果可 能选举成功，也可能选举失败。如果不为空，则从activeMasters中选择 最合适的作为Master。
+  整体流程如下图所示：
+
+  ![](..\..\imgs\大数据\elasticsearch\activemaster流程.png)
+
+
+      从masterCandidates中选主 与选主的具体细节实现封装在ElectMasterService类中，例如，判断 候选者是否足够，选择具体的节点作为Master等。 从masterCandidates中选主时，首先需要判断当前候选者人数是否达 到法定人数，否则选主失败。
+
+      从masterCandidates列表中选择，是将节点排序后选择最小的节点作为Master。但是 排序时使用自定义的比较函数 MasterCandidate::compare，早期的版本中 只是对节点 ID 进行排序，现在会优先把集群状态版本号高的节点放在 前面。
+
+      从activeMasters列表中选择，列表存储着集群当前存在活跃的Master，从这些已知的Master节点 中选择一个作为选举结果。选择过程非常简单，取列表中的最小值，比 较函数仍然通过compareNodes实现，activeMasters列表中的节点理论情 况下都是具备Master资格的。
+
+
+
+**从activeMasters列表选举Master节点**
+
+activeMaster列表是其它节点认为的当前集群的Master节点列表，如果activeMasters列表不为空，elasticsearch会优先从activeMasters列表中选举，也就是对应着流程图中的蓝色框，选举的算法是Bully算法，笔者在前文中详细介绍了Bully算法，Bully算法会涉及到优先级比较， 在activeMasters列表优先级比较的时候，如果节点有成为master的资格，那么优先级比较高，如果activeMaster列表有多个节点具有master资格，那么选择id最小的节点
+
+代码如下
+
+```text
+private static int compareNodes(DiscoveryNode o1, DiscoveryNode o2) {
+    if (o1.isMasterNode() && !o2.isMasterNode()) {
+        return -1;
+    }
+    if (!o1.isMasterNode() && o2.isMasterNode()) {
+        return 1;
+    }
+    return o1.getId().compareTo(o2.getId());
+}
+
+public DiscoveryNode tieBreakActiveMasters(Collection<DiscoveryNode> activeMasters) {
+    return activeMasters.stream().min(ElectMasterService::compareNodes).get(); 
+}
+```
+
+ **从masterCandidates列表选举Master节点**
+
+这一节对应的是红色流程图中红色部分，如果activeMaster列表为空，那么会在masterCandidates中选举，masterCandidates选举也会涉及到优先级比较，masterCandidates选举的优先级比较和masterCandidates选举的优先级比较不同。它首先会判断masterCandidates列表成员数目是否达到了最小数目discovery.zen.minimum_master_nodes。如果达到的情况下比较优先级，优先级比较的时候首先比较节点拥有的集群状态版本编号，然后再比较id，这一流程的目的是让拥有最新集群状态的节点成为master
+
+```text
+public static int compare(MasterCandidate c1, MasterCandidate c2) {
+    int ret = Long.compare(c2.clusterStateVersion, c1.clusterStateVersion);
+    if (ret == 0) {
+        ret = compareNodes(c1.getNode(), c2.getNode());
+    }
+    return ret;
+}
+```
+
+###   2 投票
+
+      在ES中，发送投票就是发送加入集群（JoinRequest）请求。得票就 是申请加入该节点的请求的数量。 收集投票，进行统计，这里的投票就是加入它的连接数，当 节点检查收到的投票是否足够时，就是检查加入它的连接数是否足够， 其中会去掉没有Master资格节点的投票。
+
+###   3 确认master
+
+      选举出的临时Master有两种情况：该临时Master是本节点或非本节 点。为此单独处理。现在准备向其发送投票。
+      如果临时Master是本节点：
+
+  等待足够多的具备Master资格的节点加入本节点（投票达到 法定人数），以完成选举。
+  超时（默认为30秒，可配置）后还没有满足数量的join请求， 则选举失败，需要进行新一轮选举。
+  成功后发布新的clusterState。
+      如果其他节点被选为Master：
+
+  不再接受其他节点的join请求。
+  向Master发送加入请求，并等待回复。超时时间默认为1分钟 （可配置），如果遇到异常，则默认重试3次（可配置）。
+  最终当选的Master会先发布集群状态，才确认客户的join请求，并且已经收到了集群状态。本步骤检查收到的集群状态中的Master节点如果为 空，或者当选的Master不是之前选择的节点，则重新选举。
+
+
+
+总结选举机制：
+
+<img src="..\..\imgs\大数据\elasticsearch\选举.jpg" style="zoom:80%;" />
+
+![](..\..\imgs\大数据\elasticsearch\master选举.png)
 
 
 
 
 
+**拓展：**
+
+### **Bully 选主算法**
+
+Bully 算法基本思想就是谁的 ID 最大或最小谁来当老大（一般选择 ID 大的）。节点的角色分为两种主节点和普通节点。在集群开始启动的时候，或者主挂了之后会发起选举，节点间通过发消息来进行选举，消息分为三种：
+
+- Election Message： 选举消息 A->B 发送选举消息，表示 A 支持 B 当 Leader。
+- Alive Message： 响应选举消息，刚才 A->B 选举 B，B 给 A 回复 Answer Messge。
+- Victory Message： 宣布胜利消息，如果 B 最终当选为 Leader，则 B 向其他节点发送 Victory Message。
 
 
 
+当一个进程P从失败中恢复，或者接收到主节点失效信息，进程P将做以下事情：
+
+```
+1）如果进程P有最大的进程ID，那么它则会向其他节点广播Coordinator (Victory) Message。否则进程P向进程号比它大的进程发送Election Message
+2）如果进程P发送Election Message后，没有接收到应答，它就会向其他节点广播Coordinator (Victory) Message，并成为master。
+3）如果进程P接收到比它进程号更高的进程的Answer (Alive) Message信息，那么它这次的选举就失败了，等待接收其他节点的Coordinator (Victory) Message。
+4）如果进程P接收到比它进程号低的进程的Election message，那么它会向该节点返回一个Answer (Alive) Message，并启动选举进程，并向比它更高的进程发送Election Message。
+5）如果进程P接收到Coordinator (Victory) Message，那么它就会把发送这条消息的节点看作为master 进程。
+```
+
+### Bully算法缺陷
+
+#### 1 Master假死
+
+Master节点承担的职责负载过重的情况下，可能无法即时对组内成员作出响应，这种便是假死。如果上图中的P6节点假死，于是P5节点成为了Master节点，但是在P6节点负载减轻之后，P6节点又对组内成员作出了响应，P6节点又会成为Master节点，如此反复，整个集群状态就会非常不可靠。
+
+Elasticsearch是如何解决这个问题的呢？在Bully算法中，Master节点P6因为负载重，来不及对P3节点作出响应，所以P3节点通知P4,P5节点进行选举。在Elasticsearch中，P3节点发现Master P6对自己长时间不作出响应，P3节点会请求其它节点判断P6节点是否存活，如果有1/2以上节点都认定P6存活，那么P3就会放弃发起选举
+
+#### 2 脑裂问题
+
+脑裂问题指的是一个集群中出现了两个及以上的Master节点。
+
+比如上图中集群因为网络原因分成了两个部分，一个部分称为partition1包含P3,P5,P6节点，另一部分称为partition2包含P2,P1,P4节点，这两个partition因为网络原因比如路由器短时故障造成不能相互通信的问题。
 
 
 
+![img](..\..\imgs\大数据\elasticsearch\脑裂问题.jpg)
+
+那么网络分区一根据Bully算法选举出了P6作为master，而网络分区二选举出了P4作为master，这就是脑裂问题。
+
+#### Elasticsearch脑裂解决方案
+
+##### Quorum算法
+
+脑裂问题是所有集群选举算法都要面对的一个问题，Elasticsearch集群机制采用了最小参与节点的方案解决的。假设elasticsearch集群中有资格投票的实例个数是n，节点想要成为master必须要得到n/2 +1票数(在本示例中是4)。上图中的分区一P6和分区二中的P4，任何一个master节点所在的分区集群的候选节点数目都小于4，更不可能得到4个选票，所以整个Elasticsearch集群处于瘫痪状态
+
+我们也可以强制指定elasticsearch节点在有M个候选节点的情况下能选举出一个主节点，但是如果配置数小于上文提到的 n/2 +1 那么会出现脑裂的情况，M的配置参数如下
+
+```text
+discovery.zen.minimum_master_nodes
+```
+
+如果产生了脑裂情况，为了避免脑裂的Master生成错误数据对整个集群产生影响。Master更新集群状态时还作出了如下防护，Master有两种指令，一种是send指令，另一种是commit指令，Master将最新集群状态推送给其它节点的时候(这是send指令)，Master节点进入等待响应状态，其它节点并不会立刻应用该集群状态，而是首先会响应Master节点表示它已经收到集群状态更新，同时等待Master节点的commit指令。Master节点如果在discovery.zen.commit_timeout配置时间内都没有收到discovery.zen.minimum_master_nodes个数的节点响应，那么Master节点就不会向其它节点发送commit指令。如果Master收到了足够数量的响应，那么Master会向集群发出提交状态的指令，此时其它节点应用集群最新状态，Master节点再次等待所有节点响应，等待时间为discovery.zen.publish_timeout，如果任何一个节点没有发出提交响应，Master再次更新整个集群状态更新。
+
+#### 3 Master降级
+
+Master主动降级发生在两种情况。
+
+第一种是master发现自己能连接到的其它节点数目小于n/2 + 1，那么master自动降级为candidate。
+
+第二种是Master在ping其它节点时候，如果发现了其它master，那么当前的master会比较cluster_state的version，如果当前master的version小，那么主动降级为candidate并主动加入另外一个master节点
+
+#### 4 网络负载问题
+
+从上图中可以看到，集群中每个节点成员都会维护和其它所有成员的交互，整个集群维护的网络连接的总数是n*(n-1)，如果集群中节点的数目非常的多，那么网络连接数目也会非常的多，网络负载会比较大，但是好在elasticsearch节点数目往往比较少，所以这个缺陷对elasticsearch集群来说不会产生什么影响，elasticsearch可以通过参数限制单播的最大连接数目，该值默认为10
+
+```text
+discovery.zen.ping.unicats.concurrent_connects
+```
 
 
+
+参考学习：https://niceaz.com/2018/11/12/es-zen-discovery-master-election/
 
 总结：
 
