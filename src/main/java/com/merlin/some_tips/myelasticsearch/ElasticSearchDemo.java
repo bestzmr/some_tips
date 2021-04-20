@@ -1,25 +1,31 @@
 package com.merlin.some_tips.myelasticsearch;
 
 import org.apache.http.HttpHost;
+import org.apache.http.HttpResponse;
+import org.apache.http.nio.protocol.HttpAsyncResponseConsumer;
 import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.DocWriteResponse;
+import org.elasticsearch.action.admin.indices.delete.DeleteIndexRequest;
+import org.elasticsearch.action.bulk.BulkRequest;
+import org.elasticsearch.action.bulk.BulkResponse;
 import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.action.index.IndexResponse;
 import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.support.replication.ReplicationResponse;
-import org.elasticsearch.client.RequestOptions;
-import org.elasticsearch.client.RestClient;
-import org.elasticsearch.client.RestHighLevelClient;
+import org.elasticsearch.client.*;
 import org.elasticsearch.common.xcontent.XContentType;
 import org.elasticsearch.index.query.BoolQueryBuilder;
 import org.elasticsearch.index.query.QueryBuilders;
+import org.elasticsearch.index.query.QueryStringQueryBuilder;
 import org.elasticsearch.index.query.RangeQueryBuilder;
 import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.search.SearchHits;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
 
 import java.io.*;
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.util.*;
 
 /**
@@ -41,7 +47,6 @@ public class ElasticSearchDemo {
                 RestClient.builder(
                         new HttpHost("localhost", 9200, "http")));
     }
-
     /**
      * 从文件中获取json字符串
      *
@@ -85,11 +90,25 @@ public class ElasticSearchDemo {
         return request;
     }
 
+    public static BulkRequest createBulkRequestIndex() {
+        BulkRequest bulkRequest = new BulkRequest();
+        File file = new File(System.getProperty("user.dir") + "/src/main/java/com/merlin/some_tips/myelasticsearch/result");
+        File[] files = file.listFiles();
+        if (null != files && files.length > 0) {
+            for (int i=0;i<files.length;i++) {
+                bulkRequest.add(new IndexRequest().index("news").id(String.valueOf(i+1)).source(readJsonFile(files[i].getAbsolutePath()),XContentType.JSON));
+            }
+        }
+        return bulkRequest;
+    }
+
     /**
      * 异步调用索引创建方法
      */
     public static void execIndexRequest() {
+        RestHighLevelClient restHighLevelClient = getRestHighLevelClient();
         final IndexRequest indexRequest = createRequestIndex();
+        //监听器
         ActionListener<IndexResponse> listener = new ActionListener<IndexResponse>() {
             @Override
             public void onResponse(IndexResponse indexResponse) {
@@ -98,7 +117,7 @@ public class ElasticSearchDemo {
                 System.out.println("索引: " + index + " id: " + id);
                 if (indexResponse.getResult() == DocWriteResponse.Result.CREATED) {
                     //处理第一次创建文档的情况
-                    System.out.println("第一次创建索引： "+index + " id: " + id);
+                    System.out.println("第一次创建索引： " + index + " id: " + id);
 
                 } else if (indexResponse.getResult() == DocWriteResponse.Result.UPDATED) {
                     //处理文档被重写的情况，因为它已经存在
@@ -112,24 +131,69 @@ public class ElasticSearchDemo {
                     System.out.println("分片总数：" + shardInfo.getTotal());
                     System.out.println("分片成功数：" + shardInfo.getSuccessful());
                 }
-//                if (shardInfo.getFailed() > 0) {
-//                    for (ReplicationResponse.ShardInfo.Failure failure :
-//                            shardInfo.getFailures()) {
-//                        String reason = failure.reason();
-//                        //处理潜在故障
-//                        System.out.println("出现故障");
-//                    }
-//                }
+                if (shardInfo.getFailed() > 0) {
+                    for (ReplicationResponse.ShardInfo.Failure failure :
+                            shardInfo.getFailures()) {
+                        String reason = failure.reason();
+                        //处理潜在故障
+                        System.out.println("出现故障");
+                    }
+                }
+                try {
+                    restHighLevelClient.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
             }
 
             @Override
             public void onFailure(Exception e) {
+                try {
+                    restHighLevelClient.close();
+                } catch (IOException ioException) {
+                    ioException.printStackTrace();
+                }
+            }
+        };
+        //异步调用索引创建方法
+        restHighLevelClient.indexAsync(indexRequest, RequestOptions.DEFAULT, listener);
+
+    }
+
+    /**
+     * 异步调用索引创建方法
+     */
+    public static void execBulkIndexRequest() throws NoSuchFieldException, IllegalAccessException {
+        RestHighLevelClient restHighLevelClient = getRestHighLevelClient();
+        BulkRequest bulkRequest = createBulkRequestIndex();
+        //监听器
+        ActionListener<BulkResponse> listener = new ActionListener<BulkResponse>() {
+            @Override
+            public void onResponse(BulkResponse bulkItemResponses) {
+                System.out.println(bulkItemResponses.status());
+                try {
+                    restHighLevelClient.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+
+            @Override
+            public void onFailure(Exception e) {
+                e.printStackTrace();
+                try {
+                    restHighLevelClient.close();
+                } catch (IOException ioException) {
+                    ioException.printStackTrace();
+                }
 
             }
         };
-        getRestHighLevelClient().indexAsync(indexRequest, RequestOptions.DEFAULT, listener);
-        System.out.println("end");
+        //异步调用索引创建方法
+        restHighLevelClient.bulkAsync(bulkRequest, RequestOptions.DEFAULT, listener);
+
     }
+
 
     /**
      * 用来处理搜索结果，转换成链表
@@ -190,6 +254,14 @@ public class ElasticSearchDemo {
         return listSearchResult(searchSourceBuilder);
     }
 
+    public static List<String> stringQuery(String value, int length) {
+        QueryStringQueryBuilder queryStringQueryBuilder = new QueryStringQueryBuilder(value);
+        SearchSourceBuilder searchSourceBuilder = new SearchSourceBuilder();
+        searchSourceBuilder.query(queryStringQueryBuilder);
+        searchSourceBuilder.size(length);
+        return listSearchResult(searchSourceBuilder);
+    }
+
     /**
      * 根据单个属性查询
      *
@@ -225,21 +297,31 @@ public class ElasticSearchDemo {
     }
 
     /**
-     * 删除es的整个数据库
-     *
-     * @param id
+     * 删除es的索引
      * @return
      * @throws IOException
      */
-//    public static boolean delete() throws IOException {
-//        RestHighLevelClient client = getRestHighLevelClient();
-//        DeleteIndexRequest request =
-//                new DeleteIndexRequest(ElasticSearchUtil.ES_NAME);
-//        client.indices().delete(request, RequestOptions.DEFAULT);
-//        return true;
-//    }
+    public static boolean delete() throws IOException {
+        RestHighLevelClient client = getRestHighLevelClient();
+        DeleteIndexRequest request =
+                new DeleteIndexRequest("posts");
+        client.indices().delete(request, RequestOptions.DEFAULT);
+        return true;
+    }
     public static void main(String[] args) {
-       execIndexRequest();
+
+//        execIndexRequest();
+
+//        try {
+//            //批量请求
+//            execBulkIndexRequest();
+//        } catch (NoSuchFieldException | IllegalAccessException e) {
+//            e.printStackTrace();
+//        }
+        List<String> list = simpleSearch("content", "COVID-19", 10);
+        list.forEach(System.out::println);
+        List<String> list2 = stringQuery("COVID-19", 10);
+        list2.forEach(System.out::println);
 
     }
 
