@@ -34,7 +34,7 @@ import java.util.*;
  * @author zhaoqiang
  */
 public class ElasticSearchDemo {
-    public static final String JSONFILE = "D:\\ProjectData\\idea-workspace\\elasticsearch_demo\\src\\main\\java\\org\\example\\0f7c3886-302c-3b72-92a2-42d73501a465.json";
+    public static final String JSONFILE = "D:\\ProjectData\\idea-workspace\\elasticsearch_demo\\src\\main\\java\\org\\example\\result\\0f7c3886-302c-3b72-92a2-42d73501a465.json";
 
 
     /**
