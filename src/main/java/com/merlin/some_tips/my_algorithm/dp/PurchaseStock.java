@@ -24,17 +24,49 @@ package com.merlin.some_tips.my_algorithm.dp;
  * @author zhaoqiang
  */
 public class PurchaseStock {
+    //暴力解决
+//    public static int maxProfit(int[] prices) {
+//        int len = prices.length;
+//        int ans = 0;
+//        for (int i = 0; i < len - 1; i++) {
+//            for (int j = i + 1; j < len; j++) {
+//                ans = Math.max(ans, prices[j] - prices[i]);
+//            }
+//        }
+//        return ans;
+//    }
+
+    /**
+     * dp
+     * @param prices
+     * @return
+     * `dp[i][j]`：下标为 `i` 这一天结束的时候，手上持股状态为 `j` 时，我们持有的现金数。
+     * **推导状态转移方程**：
+     *
+     * `dp[i][0]`：规定了今天不持股，有以下两种情况：
+     *
+     * + 昨天不持股，今天什么都不做；
+     * + 昨天持股，今天卖出股票（现金数增加），
+     *
+     * `dp[i][1]`：规定了今天持股，有以下两种情况：
+     *
+     * + 昨天持股，今天什么都不做（现金数与昨天一样）；
+     * + 昨天不持股，今天买入股票（**注意**：只允许交易一次，因此手上的现金数就是当天的股价的相反数）。
+     */
     public static int maxProfit(int[] prices) {
         int len = prices.length;
-        int ans = 0;
-        for (int i = 0; i < len - 1; i++) {
-            for (int j = i + 1; j < len; j++) {
-                ans = Math.max(ans, prices[j] - prices[i]);
-            }
+        if (len < 2) {
+            return 0;
         }
-        return ans;
+        int[][] dp = new int[len][2];
+        dp[0][0] = 0;
+        dp[0][1] = -prices[0];
+        for (int i = 1; i < len; i++) {
+            dp[i][0] = Math.max(dp[i - 1][0], dp[i - 1][1] + prices[i]);
+            dp[i][1] = Math.max( - prices[i], dp[i - 1][1]);
+        }
+        return dp[len - 1][0];
     }
-
     public static void main(String[] args) {
         int[] prices = {7, 1, 5, 3, 6, 4};
         System.out.println(maxProfit(prices));
