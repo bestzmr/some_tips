@@ -25,3 +25,167 @@ public class DefaultSingletonBeanRegistry extends SimpleAliasRegistry implements
 }
 ```
 
+可以看到代码中的singletonObjects就是存放单例bean的容器，就是一个ConcurrentHashMap。暂且不管Spring是怎么把XML配置bean配置文件还是@bean相关的注解怎么转换成bean的。反正最终生成的单例bean是被存放到这个map中了，之后的获取也不管多复杂，多少场景，最后也肯定会是从map中获取bean。
+
+
+接下来在看DefaultListableBeanFactory：
+
+在生成bean之前，Spring会先将我们定义的bean的信息保存起来，有些bean可能会暂时用不到就设置成懒加载的，先把定义存起来，用的时候直接生成比较快。而且bean的生成流程（各种大牛和面试官称其为bean的生命周期）非常复杂，先保存bean的信息，便于后期进行各种处理，比如 依赖注入，循环依赖等等过程。也就是我们写的@component ，@bean等注解的类，首先会被定义成Spring中的bean类的抽象 也就是BeanDefinition
+
+```java
+//
+// Source code recreated from a .class file by IntelliJ IDEA
+// (powered by FernFlower decompiler)
+//
+ 
+package org.springframework.beans.factory.config;
+ 
+import org.springframework.beans.BeanMetadataElement;
+import org.springframework.beans.MutablePropertyValues;
+import org.springframework.core.AttributeAccessor;
+import org.springframework.lang.Nullable;
+ 
+public interface BeanDefinition extends AttributeAccessor, BeanMetadataElement {
+    String SCOPE_SINGLETON = "singleton";
+    String SCOPE_PROTOTYPE = "prototype";
+    int ROLE_APPLICATION = 0;
+    int ROLE_SUPPORT = 1;
+    int ROLE_INFRASTRUCTURE = 2;
+ 
+    void setParentName(@Nullable String var1);
+ 
+    @Nullable
+    String getParentName();
+ 
+    void setBeanClassName(@Nullable String var1);
+ 
+    @Nullable
+    String getBeanClassName();
+ 
+    void setScope(@Nullable String var1);
+ 
+    @Nullable
+    String getScope();
+ 
+    void setLazyInit(boolean var1);
+ 
+    boolean isLazyInit();
+ 
+    void setDependsOn(@Nullable String... var1);
+ 
+    @Nullable
+    String[] getDependsOn();
+ 
+    void setAutowireCandidate(boolean var1);
+ 
+    boolean isAutowireCandidate();
+ 
+    void setPrimary(boolean var1);
+ 
+    boolean isPrimary();
+ 
+    void setFactoryBeanName(@Nullable String var1);
+ 
+    @Nullable
+    String getFactoryBeanName();
+ 
+    void setFactoryMethodName(@Nullable String var1);
+ 
+    @Nullable
+    String getFactoryMethodName();
+ 
+    ConstructorArgumentValues getConstructorArgumentValues();
+ 
+    default boolean hasConstructorArgumentValues() {
+        return !this.getConstructorArgumentValues().isEmpty();
+    }
+ 
+    MutablePropertyValues getPropertyValues();
+ 
+    default boolean hasPropertyValues() {
+        return !this.getPropertyValues().isEmpty();
+    }
+ 
+    void setInitMethodName(@Nullable String var1);
+ 
+    @Nullable
+    String getInitMethodName();
+ 
+    void setDestroyMethodName(@Nullable String var1);
+ 
+    @Nullable
+    String getDestroyMethodName();
+ 
+    void setRole(int var1);
+ 
+    int getRole();
+ 
+    void setDescription(@Nullable String var1);
+ 
+    @Nullable
+    String getDescription();
+ 
+    boolean isSingleton();
+ 
+    boolean isPrototype();
+ 
+    boolean isAbstract();
+ 
+    @Nullable
+    String getResourceDescription();
+ 
+    @Nullable
+    BeanDefinition getOriginatingBeanDefinition();
+}
+```
+
+BeanDefinition是对Spring中bean的定义的抽象，假设我们不看上述代码自己考虑我们自己定义bean的定义信息，大体都需要什么信息，
+1 bean的class信息：生成一个对象的必须信息
+
+2 bean的作用域信息：在开发中有的对象用完就不想要了，下次会新建新的，有的是一个对象一直用。有的对象是一个请求一个。满足这个功能的话 ，作用域信息也是必不可少的。
+
+3 bean是否懒加载信息：
+
+4 bean的初始化问题：有的对象是直接构造函数new的，有的却是工厂方法生成的，如果是工厂方法生成的话，这个时候是不是就需要把生成对象的方法保存起来呢，告诉Spring生成方法。
+
+当然这只是我能想到的，Spring能想到的肯定更多，适应更多的场景。
+
+总而言之，Spring会将需要生成bean的类进行扫描，然后生成这个bean定义信息，保存起来。
+
+
+```java
+//
+// Source code recreated from a .class file by IntelliJ IDEA
+// (powered by FernFlower decompiler)
+//
+ 
+package org.springframework.beans.factory.support;
+ 
+//省略import信息
+ 
+public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFactory implements ConfigurableListableBeanFactory, BeanDefinitionRegistry, Serializable {
+    @Nullable
+    private static Class<?> javaxInjectProviderClass;
+    private static final Map<String, Reference<DefaultListableBeanFactory>> serializableFactories;
+    @Nullable
+    private String serializationId;
+    private boolean allowBeanDefinitionOverriding = true;
+    private boolean allowEagerClassLoading = true;
+    @Nullable
+    private Comparator<Object> dependencyComparator;
+    private AutowireCandidateResolver autowireCandidateResolver = new SimpleAutowireCandidateResolver();
+    private final Map<Class<?>, Object> resolvableDependencies = new ConcurrentHashMap(16);
+    //这个map就是用来存储bean定义的map。
+    private final Map<String, BeanDefinition> beanDefinitionMap = new ConcurrentHashMap(256);
+    private final Map<Class<?>, String[]> allBeanNamesByType = new ConcurrentHashMap(64);
+    private final Map<Class<?>, String[]> singletonBeanNamesByType = new ConcurrentHashMap(64);
+    private volatile List<String> beanDefinitionNames = new ArrayList(256);
+    private volatile Set<String> manualSingletonNames = new LinkedHashSet(16);
+    @Nullable
+    private volatile String[] frozenBeanDefinitionNames;
+    private volatile boolean configurationFrozen = false;
+ 
+    //省略方法。
+}
+```
+
