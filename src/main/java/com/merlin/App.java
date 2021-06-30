@@ -8,6 +8,10 @@ package com.merlin;
 public class App 
 {
     public int nn = 1;
+
+    public void printSuiBian() {
+        System.out.println("hello world");
+    }
     public static class InnerClass {
         public static int staticMem = 1;
         public int num = 2;
