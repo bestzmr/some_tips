@@ -1,6 +1,7 @@
 package com.merlin.some_tips.my_algorithm.linkedlist;
 
 import java.util.List;
+import java.util.PriorityQueue;
 
 /**
  * @author merlin
@@ -141,8 +142,8 @@ public class MyLinkedListExample {
 
     /**
      * 合并两个有序链表使之变为一个有序链表
-     * @param node1
-     * @param node2
+     * @param l1
+     * @param l2
      * @return
      */
     public ListNode mergeOrderlyLinkedList(ListNode l1, ListNode l2) {
@@ -171,18 +172,116 @@ public class MyLinkedListExample {
         }
         return guard.next;
     }
-    // todo 时间超时
-    public ListNode mergeOrderlyLinkedList(ListNode[] lists) {
-        ListNode l1 = lists[0];
-        int i = 1;
-        ListNode l2 = lists[i];
 
-        while (i < lists.length) {
-            l1 = mergeOrderlyLinkedList(l1, l2);
-            i++;
+    /**
+     * 合并k个有序链表(使用优先级队列--最小堆)
+     * @param lists
+     * @return
+     */
+    public ListNode mergeOrderlyLinkedList(ListNode[] lists) {
+        ListNode dummy = new ListNode(-1);
+        ListNode cur = dummy;
+        PriorityQueue<ListNode> pq = new PriorityQueue<>(lists.length, (a, b) -> (a.val - b.val));
+        for (ListNode node : lists) {
+            if (node != null) {
+                pq.add(node);
+            }
         }
-        return l1;
+        while (!pq.isEmpty()) {
+            ListNode node = pq.poll();
+            cur.next = node;
+            if (node.next != null) {
+                pq.add(node.next);
+            }
+            cur = cur.next;
+        }
+        return dummy.next;
+
     }
+
+    /**
+     * 相交链表 第一种解法
+     * headA: A->B->C->D
+     * headB: E->F->G->C->D
+     *
+     * A->B->C->D->E->F->G->C->D
+     * E->F->G->C->D->A->B->C->D
+     * @param headA
+     * @param headB
+     * @return
+     */
+    public ListNode getIntersectionNode(ListNode headA, ListNode headB) {
+        ListNode p = headA;
+        ListNode q = headB;
+        while (p != null || q != null) {
+            if (p == q) {
+                return p;
+            }
+            if (p == null) {
+                p = headB;
+                continue;
+            }
+            if (q == null) {
+                q = headA;
+                continue;
+            }
+            p = p.next;
+            q = q.next;
+        }
+        return null;
+    }
+    /**
+     * 相交链表 第二种解法,将链表1的尾节点的指针指向链表2的头节点，
+     * 构造成一个环，通过求环的入口，从而求出相交节点
+     * headA: A->B->C->D
+     * headB: E->F->G->C->D
+     *
+     * A->B->C->D->E->F->G->C->D
+     * E->F->G->C->D->A->B->C->D
+     * @param headA
+     * @param headB
+     * @return
+     */
+    public ListNode getIntersectionNodeByCycle(ListNode headA, ListNode headB) {
+        if (headA == headB) {
+            return headA;
+        }
+        ListNode p = headA;// p为尾节点
+        while (p.next != null) {
+            p = p.next;
+        }
+        p.next = headB;
+        ListNode fast = headA;
+        ListNode slow = headA;
+        while (fast.next != null && fast.next.next != null) {
+            fast = fast.next.next;
+            slow = slow.next;
+            if (fast == slow) {
+                break;
+            }
+        }
+        if (fast.next == null || fast.next.next == null) {
+            p.next = null;
+            return null;
+        }
+        slow = headA;
+        while (fast != null) {
+            if (fast == slow) {
+                p.next = null;
+                return slow;
+            }
+            fast = fast.next;
+            slow = slow.next;
+
+        }
+        p.next = null;
+        return null;
+
+
+    }
+
+
+
 }
 
 class Node{
