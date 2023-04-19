@@ -280,7 +280,27 @@ public class MyLinkedListExample {
 
     }
 
-
+    /**
+     * 删除有序链表中重复元素
+     * @param head
+     * @return
+     */
+    public ListNode deleteDuplicates(ListNode head) {
+        if (head == null) {
+            return null;
+        }
+        ListNode slow = head;
+        ListNode fast = head;
+        while (fast != null) {
+            if (fast.val != slow.val) {
+                slow.next = fast;
+                slow = fast;
+            }
+            fast = fast.next;
+        }
+        slow.next = null;
+        return head;
+    }
 
 }
 
